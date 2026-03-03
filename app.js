@@ -1,5 +1,14 @@
-const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwLGuDeqLoQsoTHlAigX5dpZWEqPw4ZqNX981-qsvG7hFixhOd_GseX4OP-ivmOy1YgMQ/exec";
+// ==========================
+// CONFIG
+// ==========================
+const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwLGuDeqLoQsoTHlAigX5dpZWEqPw4ZqNX981-qsvG7hFixhOd_GseX4OP-ivmOy1YgMQ/exec"; // <-- yahan apna latest deployed Apps Script URL paste karo
 
+// Shared PIN (user enters, we keep in memory)
+let APP_PIN = "";
+
+// ==========================
+// HELPERS
+// ==========================
 const fmt = new Intl.NumberFormat("en-PK", { maximumFractionDigits: 2 });
 const money = (n) => `Rs ${fmt.format(Number(n || 0))}`;
 const el = (id) => document.getElementById(id);
@@ -45,6 +54,9 @@ const accName = el("accName");
 const accOpen = el("accOpen");
 const accBtn = el("accBtn");
 
+// ==========================
+// DATE / AMOUNT
+// ==========================
 function todayISO() {
   const d = new Date();
   const off = d.getTimezoneOffset();
@@ -58,6 +70,9 @@ function parseAmount(v) {
   return isFinite(n) ? n : 0;
 }
 
+// ==========================
+// TOAST
+// ==========================
 function showToast(msg, type = "success") {
   const area = el("toastArea");
   const id = `t_${Date.now()}`;
@@ -75,8 +90,11 @@ function showToast(msg, type = "success") {
   setTimeout(() => t.remove(), 3500);
 }
 
+// ==========================
+// API (PIN SECURED)
+// ==========================
 async function apiGet(action) {
-  const url = `${SCRIPT_URL}?action=${encodeURIComponent(action)}`;
+  const url = `${SCRIPT_URL}?action=${encodeURIComponent(action)}&pin=${encodeURIComponent(APP_PIN)}`;
   const res = await fetch(url);
   const data = await res.json();
   if (!data.ok) throw new Error(data.error || "GET failed");
@@ -84,24 +102,30 @@ async function apiGet(action) {
 }
 
 async function apiPost(payload) {
+  payload.pin = APP_PIN;
+
   const res = await fetch(SCRIPT_URL, {
     method: "POST",
     headers: { "Content-Type": "text/plain;charset=utf-8" },
     body: JSON.stringify(payload),
   });
+
   const data = await res.json();
   if (!data.ok) throw new Error(data.error || "POST failed");
   return data;
 }
 
+// ==========================
+// ACCOUNTS
+// ==========================
 function getOwnerAccounts(owner) {
   return accounts
-    .filter(a => String(a.Status || "Active") === "Active")
-    .filter(a => String(a.Owner || "").trim() === owner)
-    .map(a => ({
+    .filter((a) => String(a.Status || "Active") === "Active")
+    .filter((a) => String(a.Owner || "").trim() === owner)
+    .map((a) => ({
       name: String(a.AccountName || "").trim(),
       type: String(a.AccountType || "").trim(),
-      opening: parseAmount(a.OpeningBalance)
+      opening: parseAmount(a.OpeningBalance),
     }));
 }
 
@@ -109,31 +133,36 @@ function fillAccountDropdowns() {
   const owner = ownerSelect.value;
   const list = getOwnerAccounts(owner);
 
-  const options = list.map(i => `<option value="${i.name}">${i.name}</option>`).join("");
+  const options = list.map((i) => `<option value="${i.name}">${i.name}</option>`).join("");
   accountSelect.innerHTML = options;
   fromAccount.innerHTML = options;
   toAccount.innerHTML = options;
   commissionAccountSelect.innerHTML = options;
 
   // default commission account = Cash if exists
-  const cash = list.find(a => a.name.toLowerCase() === "cash");
+  const cash = list.find((a) => a.name.toLowerCase() === "cash");
   if (cash) commissionAccountSelect.value = cash.name;
 }
 
+// ==========================
+// FILTER RANGE
+// ==========================
 function startOfWeek(d) {
   const dt = new Date(d);
   const day = dt.getDay();
-  const diff = (day === 0 ? -6 : 1) - day;
+  const diff = (day === 0 ? -6 : 1) - day; // Monday start
   dt.setDate(dt.getDate() + diff);
   dt.setHours(0, 0, 0, 0);
   return dt;
 }
+
 function startOfMonth(d) {
   const dt = new Date(d);
   dt.setDate(1);
   dt.setHours(0, 0, 0, 0);
   return dt;
 }
+
 function getRangeForFilter(filter) {
   const now = new Date();
   now.setHours(0, 0, 0, 0);
@@ -148,18 +177,23 @@ function getRangeForFilter(filter) {
   end.setHours(0, 0, 0, 0);
   return { start, end };
 }
+
 function dateOnly(iso) {
   const [y, m, d] = String(iso).slice(0, 10).split("-").map(Number);
   const dt = new Date(y, m - 1, d);
   dt.setHours(0, 0, 0, 0);
   return dt;
 }
+
 function inRange(tx, range) {
   if (!tx.date) return false;
   const d = dateOnly(tx.date);
   return d >= range.start && d < range.end;
 }
 
+// ==========================
+// TRANSACTION NORMALIZE
+// ==========================
 function normalizeTx(row) {
   return {
     date: String(row.Date || "").slice(0, 10),
@@ -176,23 +210,24 @@ function normalizeTx(row) {
   };
 }
 
-// Convert EntryType into balance logic
+// ==========================
+// BALANCE LOGIC
+// ==========================
 function applyEntryToBalances(bal, tx) {
   const amt = tx.amount || 0;
   const comm = tx.commission || 0;
 
-  // Income/Expense/Transfer + shop shortcuts
   if (tx.entryType === "Income") {
     bal.set(tx.fromAccount, (bal.get(tx.fromAccount) || 0) + amt);
   } else if (tx.entryType === "Expense") {
     bal.set(tx.fromAccount, (bal.get(tx.fromAccount) || 0) - amt);
   } else {
-    // Transfer / CustomerSent / CustomerCash treated as transfer using from/to
+    // Transfer / CustomerSent / CustomerCash
     bal.set(tx.fromAccount, (bal.get(tx.fromAccount) || 0) - amt);
     bal.set(tx.toAccount, (bal.get(tx.toAccount) || 0) + amt);
   }
 
-  // Commission adds as Income into commissionAccount (optional)
+  // Commission counts as income into commissionAccount
   if (comm > 0 && tx.commissionAccount) {
     bal.set(tx.commissionAccount, (bal.get(tx.commissionAccount) || 0) + comm);
   }
@@ -202,11 +237,11 @@ function calcBalances(owner) {
   const accList = getOwnerAccounts(owner);
   const bal = new Map();
 
-  // opening
+  // opening balances
   for (const a of accList) bal.set(a.name, (bal.get(a.name) || 0) + (a.opening || 0));
 
-  // transactions
-  const txList = allTx.filter(t => t.owner === owner);
+  // apply transactions
+  const txList = allTx.filter((t) => t.owner === owner);
   for (const t of txList) applyEntryToBalances(bal, t);
 
   const items = [...bal.entries()].map(([name, amount]) => ({ name, amount }));
@@ -215,24 +250,63 @@ function calcBalances(owner) {
 }
 
 function sumIncomeExpense(txList) {
-  // Income = Income entries + commission
-  const income = txList
-    .filter(t => t.entryType === "Income")
-    .reduce((a, b) => a + b.amount, 0) +
+  const income =
+    txList.filter((t) => t.entryType === "Income").reduce((a, b) => a + b.amount, 0) +
     txList.reduce((a, b) => a + (b.commission || 0), 0);
 
-  const expense = txList
-    .filter(t => t.entryType === "Expense")
-    .reduce((a, b) => a + b.amount, 0);
+  const expense = txList.filter((t) => t.entryType === "Expense").reduce((a, b) => a + b.amount, 0);
 
   return { income, expense };
 }
 
+// ==========================
+// UI: ENTRY TYPE AUTO LOGIC
+// ==========================
+function updateEntryUI() {
+  const t = entryTypeSelect.value;
+
+  const isTransferLike = t === "Transfer" || t === "CustomerSent" || t === "CustomerCash";
+  if (isTransferLike) {
+    singleAccountWrap.classList.add("d-none");
+    transferWrap.classList.remove("d-none");
+  } else {
+    transferWrap.classList.add("d-none");
+    singleAccountWrap.classList.remove("d-none");
+  }
+
+  const list = getOwnerAccounts(ownerSelect.value);
+  const cashName = list.find((a) => a.name.toLowerCase() === "cash")?.name || "Cash";
+
+  if (t === "CustomerSent") {
+    // Customer sent to account, you gave cash: Cash -> Account
+    fromAccount.value = cashName;
+
+    // ToAccount should be non-cash
+    if (toAccount.value === cashName) {
+      const firstNonCash = list.find((a) => a.name !== cashName)?.name;
+      if (firstNonCash) toAccount.value = firstNonCash;
+    }
+  }
+
+  if (t === "CustomerCash") {
+    // Customer gave cash, you sent from account: Account -> Cash
+    toAccount.value = cashName;
+
+    if (fromAccount.value === cashName) {
+      const firstNonCash = list.find((a) => a.name !== cashName)?.name;
+      if (firstNonCash) fromAccount.value = firstNonCash;
+    }
+  }
+}
+
+// ==========================
+// RENDER
+// ==========================
 function renderChart(income, expense) {
   const ctx = document.getElementById("chart");
   const data = {
     labels: ["Income", "Expense"],
-    datasets: [{ label: "Amount", data: [income, expense], borderWidth: 1 }]
+    datasets: [{ label: "Amount", data: [income, expense], borderWidth: 1 }],
   };
 
   if (chart) {
@@ -244,7 +318,7 @@ function renderChart(income, expense) {
   chart = new Chart(ctx, {
     type: "bar",
     data,
-    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } } }
+    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } } },
   });
 }
 
@@ -256,23 +330,28 @@ function renderTable(txList) {
     return;
   }
 
-  txBody.innerHTML = items.map(t => {
-    const acc = (t.entryType === "Income" || t.entryType === "Expense")
-      ? t.fromAccount
-      : `${t.fromAccount} ➜ ${t.toAccount}`;
+  txBody.innerHTML = items
+    .map((t) => {
+      const acc =
+        t.entryType === "Income" || t.entryType === "Expense"
+          ? t.fromAccount
+          : `${t.fromAccount} ➜ ${t.toAccount}`;
 
-    return `
-      <tr>
-        <td class="fw-semibold">${t.date}</td>
-        <td>${t.owner}</td>
-        <td><span class="badge bg-light text-dark border">${t.entryType}</span></td>
-        <td class="text-end fw-bold">${money(t.amount)}</td>
-        <td>${acc}</td>
-        <td>${t.commission > 0 ? money(t.commission) + " (" + t.commissionAccount + ")" : "-"}</td>
-        <td class="text-muted small">${(t.party || "-").slice(0, 22)}</td>
-      </tr>
-    `;
-  }).join("");
+      const comm = t.commission > 0 ? `${money(t.commission)} (${t.commissionAccount})` : "-";
+
+      return `
+        <tr>
+          <td class="fw-semibold">${t.date}</td>
+          <td>${t.owner}</td>
+          <td><span class="badge bg-light text-dark border">${t.entryType}</span></td>
+          <td class="text-end fw-bold">${money(t.amount)}</td>
+          <td>${acc}</td>
+          <td>${comm}</td>
+          <td class="text-muted small">${(t.party || "-").slice(0, 22)}</td>
+        </tr>
+      `;
+    })
+    .join("");
 }
 
 function computeDashboard() {
@@ -280,85 +359,50 @@ function computeDashboard() {
   const range = getRangeForFilter(activeFilter);
 
   let scoped = [];
-  if (dashOwner === "All") scoped = allTx.filter(t => inRange(t, range));
-  else scoped = allTx.filter(t => t.owner === dashOwner && inRange(t, range));
+  if (dashOwner === "All") scoped = allTx.filter((t) => inRange(t, range));
+  else scoped = allTx.filter((t) => t.owner === dashOwner && inRange(t, range));
 
   const { income, expense } = sumIncomeExpense(scoped);
-
   incomeEl.textContent = money(income);
   expenseEl.textContent = money(expense);
   netPillEl.textContent = `Net: ${money(income - expense)}`;
 
   if (dashOwner === "All") {
-    // combine Self + Ahsan balances for display
     const selfB = calcBalances("Self");
     const ahsanB = calcBalances("Ahsan");
-    const map = new Map();
 
-    for (const i of selfB.items) map.set("Self • " + i.name, i.amount);
-    for (const i of ahsanB.items) map.set("Ahsan • " + i.name, i.amount);
+    const items = [
+      ...selfB.items.map((i) => ({ name: `Self • ${i.name}`, amount: i.amount })),
+      ...ahsanB.items.map((i) => ({ name: `Ahsan • ${i.name}`, amount: i.amount })),
+    ];
 
-    const items = [...map.entries()].map(([name, amount]) => ({ name, amount }));
     const total = selfB.total + ahsanB.total;
-
     totalBalEl.textContent = money(total);
-    balancesLine.textContent = items.length ? items.map(i => `${i.name}: ${money(i.amount)}`).join(" | ") : "—";
+    balancesLine.textContent = items.length ? items.map((i) => `${i.name}: ${money(i.amount)}`).join(" | ") : "—";
   } else {
     const { items, total } = calcBalances(dashOwner);
     totalBalEl.textContent = money(total);
-    balancesLine.textContent = items.length ? items.map(i => `${i.name}: ${money(i.amount)}`).join(" | ") : "—";
+    balancesLine.textContent = items.length ? items.map((i) => `${i.name}: ${money(i.amount)}`).join(" | ") : "—";
   }
 
   renderChart(income, expense);
   renderTable(scoped);
 }
 
-function updateEntryUI() {
-  const t = entryTypeSelect.value;
-
-  // show/hide transfer section
-  const isTransferLike = (t === "Transfer" || t === "CustomerSent" || t === "CustomerCash");
-  if (isTransferLike) {
-    singleAccountWrap.classList.add("d-none");
-    transferWrap.classList.remove("d-none");
-  } else {
-    transferWrap.classList.add("d-none");
-    singleAccountWrap.classList.remove("d-none");
-  }
-
-  // Auto set for shop exchange
-  const list = getOwnerAccounts(ownerSelect.value);
-  const cash = list.find(a => a.name.toLowerCase() === "cash")?.name || "Cash";
-
-  if (t === "CustomerSent") {
-    // Customer sent to account, you gave cash: Cash -> Account
-    fromAccount.value = cash;
-    // To: keep user choice (default first non-cash)
-    if (toAccount.value === cash) {
-      const firstNonCash = list.find(a => a.name !== cash)?.name;
-      if (firstNonCash) toAccount.value = firstNonCash;
-    }
-  }
-
-  if (t === "CustomerCash") {
-    // Customer gave cash, you sent from account: Account -> Cash
-    toAccount.value = cash;
-    if (fromAccount.value === cash) {
-      const firstNonCash = list.find(a => a.name !== cash)?.name;
-      if (firstNonCash) fromAccount.value = firstNonCash;
-    }
-  }
-}
-
+// ==========================
+// LOAD
+// ==========================
 async function loadAll() {
   try {
     refreshBtn.disabled = true;
+
     accounts = await apiGet("accounts");
     allTx = (await apiGet("transactions")).map(normalizeTx);
 
     fillAccountDropdowns();
     updateEntryUI();
     computeDashboard();
+
     showToast("Loaded successfully.", "success");
   } catch (e) {
     console.error(e);
@@ -368,7 +412,22 @@ async function loadAll() {
   }
 }
 
-// Events
+// ==========================
+// PIN GATE
+// ==========================
+async function openPinGate() {
+  const pin = prompt("Enter 4-digit PIN:");
+  APP_PIN = (pin || "").trim();
+
+  if (!APP_PIN) throw new Error("PIN required");
+
+  // Verify PIN
+  await apiGet("accounts");
+}
+
+// ==========================
+// EVENTS
+// ==========================
 ownerSelect.addEventListener("change", () => {
   fillAccountDropdowns();
   updateEntryUI();
@@ -378,9 +437,9 @@ entryTypeSelect.addEventListener("change", updateEntryUI);
 
 dashboardOwner.addEventListener("change", computeDashboard);
 
-document.querySelectorAll("[data-filter]").forEach(btn => {
+document.querySelectorAll("[data-filter]").forEach((btn) => {
   btn.addEventListener("click", () => {
-    document.querySelectorAll("[data-filter]").forEach(b => b.classList.remove("active"));
+    document.querySelectorAll("[data-filter]").forEach((b) => b.classList.remove("active"));
     btn.classList.add("active");
     activeFilter = btn.getAttribute("data-filter");
     activeFilterLabel.textContent = activeFilter[0].toUpperCase() + activeFilter.slice(1);
@@ -398,6 +457,7 @@ exportPdfBtn.addEventListener("click", () => {
   doc.save(`FinTrackShopPro-${dashboardOwner.value}-${activeFilter}-${todayISO()}.pdf`);
 });
 
+// Save Transaction
 el("txnForm").addEventListener("submit", async (e) => {
   e.preventDefault();
 
@@ -410,7 +470,6 @@ el("txnForm").addEventListener("submit", async (e) => {
   const entryType = entryTypeSelect.value;
   const commission = parseAmount(commissionInput.value);
 
-  // Build accounts for save
   let fromA = "";
   let toA = "";
 
@@ -420,6 +479,7 @@ el("txnForm").addEventListener("submit", async (e) => {
   } else {
     fromA = fromAccount.value;
     toA = toAccount.value;
+
     if (fromA === toA) {
       showToast("From & To must be different.", "danger");
       return;
@@ -443,7 +503,7 @@ el("txnForm").addEventListener("submit", async (e) => {
     party: partyInput.value.trim(),
     commission: commissionInput.value,
     commissionAccount: commissionAccountSelect.value,
-    note: noteInput.value.trim()
+    note: noteInput.value.trim(),
   };
 
   try {
@@ -484,7 +544,7 @@ accForm.addEventListener("submit", async (e) => {
     owner: accOwner.value,
     accountName: accName.value.trim(),
     accountType: "Bank",
-    openingBalance: accOpen.value
+    openingBalance: accOpen.value,
   };
 
   try {
@@ -510,7 +570,18 @@ accForm.addEventListener("submit", async (e) => {
   }
 });
 
-// Boot
+// ==========================
+// BOOT
+// ==========================
 el("year").textContent = new Date().getFullYear();
 dateInput.value = todayISO();
-loadAll();
+
+(async () => {
+  try {
+    await openPinGate();
+    await loadAll();
+  } catch (e) {
+    console.error(e);
+    alert("Access denied. Refresh page and enter correct PIN.");
+  }
+})();
