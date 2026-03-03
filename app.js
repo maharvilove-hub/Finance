@@ -1,4 +1,4 @@
-const SCRIPT_URL = "PASTE_NEW_WEB_APP_URL_HERE";
+const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwLGuDeqLoQsoTHlAigX5dpZWEqPw4ZqNX981-qsvG7hFixhOd_GseX4OP-ivmOy1YgMQ/exec";
 
 const fmt = new Intl.NumberFormat("en-PK", { maximumFractionDigits: 2 });
 const money = (n) => `Rs ${fmt.format(Number(n || 0))}`;
